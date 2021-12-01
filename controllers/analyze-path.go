@@ -24,13 +24,16 @@ func (c *AnalyzePath) Post() {
 		fmt.Println(err)
 	}
 
-	// cmd := exec.Command("python", "--version")
-	cmd := exec.Command("python", "static/py/netinfo.py", "--source", request.Source, "--destination", request.Destination)
+	fmt.Println(request.Source)
+	fmt.Println(request.Destination)
+
+	cmd := exec.Command("static/py/netinfo.py", "--source", request.Source, "--destination", request.Destination)
 	var outb, errb bytes.Buffer
 	cmd.Stdout = &outb
 	cmd.Stderr = &errb
 	err := cmd.Run()
 	if err != nil {
+		fmt.Println(errb.String())
 		log.Fatal(err)
 	}
 

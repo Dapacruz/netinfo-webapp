@@ -40,7 +40,8 @@ def get_active_gateway(nb, src_ip):
         gw = json.loads(gw["payload"])
 
         # Skip if no device key
-        if device := gw.get("device"):
+        device = gw.get("device")
+        if device:
             # Strip firewall vsys from hostname
             if "/" in device:
                 device = device.split("/")[0]
@@ -94,7 +95,6 @@ def analyze_path(mgmt_ip, src_ip, dst_ip, credentials, vendor):
                 "username": credentials["Cisco"]["username"],
                 "password": credentials["Cisco"]["password"],
             },
-            "ttp_template": fr"{cwd}\cisco.ttp",
             "commands": [
                 f"ping {dst_ip} source {src_ip}",
                 f"traceroute {dst_ip} source {src_ip}",
@@ -107,7 +107,6 @@ def analyze_path(mgmt_ip, src_ip, dst_ip, credentials, vendor):
                 "username": credentials["Palo Alto Networks"]["username"],
                 "password": credentials["Palo Alto Networks"]["password"],
             },
-            "ttp_template": fr"{cwd}\pan.ttp",
             "commands": [
                 f"ping count 4 source {src_ip} host {dst_ip}",
                 f"traceroute source {src_ip} host {dst_ip}",
@@ -124,8 +123,6 @@ def analyze_path(mgmt_ip, src_ip, dst_ip, credentials, vendor):
                     strip_prompt=True,
                     strip_command=True,
                     delay_factor=2,
-                    use_ttp=False,
-                    ttp_template=vendors[vendor]["ttp_template"],
                 )
             )
 
