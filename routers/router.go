@@ -1,7 +1,7 @@
 package routers
 
 import (
-	"github.com/Dapacruz/netinfo/controllers"
+	"netinfo/controllers"
 
 	beego "github.com/beego/beego/v2/server/web"
 )
