@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 
+# TODO: Parse ping output
+# TODO: Parse traceroute output
+# TODO: Insert hop zero (router source IP / client default gateway)
+# TODO: Stylize web frontend
+# TODO: Publish to server (configure NGINX, create certificate, register DNS)
+
 import argparse
 import json
 import logging
