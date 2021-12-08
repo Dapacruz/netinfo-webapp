@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"encoding/json"
 
 	beego "github.com/beego/beego/v2/server/web"
 )
@@ -18,14 +19,16 @@ type AnalyzePathRequest struct {
 	Destination string `form:"destination"`
 }
 
+type Response struct {
+	Stderr string `json:"stderr"`
+	Stdout json.RawMessage `json:"stdout"`
+}
+
 func (c *AnalyzePath) Post() {
 	request := AnalyzePathRequest{}
     if err := c.ParseForm(&request); err != nil {
 		fmt.Println(err)
 	}
-
-	fmt.Println(request.Source)
-	fmt.Println(request.Destination)
 
 	cmd := exec.Command("static/py/netinfo.py", "--source", request.Source, "--destination", request.Destination)
 	var outb, errb bytes.Buffer
@@ -33,11 +36,14 @@ func (c *AnalyzePath) Post() {
 	cmd.Stderr = &errb
 	err := cmd.Run()
 	if err != nil {
-		fmt.Println(errb.String())
 		log.Fatal(err)
 	}
 
-	fmt.Println("out:", outb.String(), "err:", errb.String())
+	res, err := json.Marshal(Response{errb.String(), []byte(outb.String())})
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	c.Ctx.ResponseWriter.Write([]byte(outb.String()))
+	// fmt.Println(string(res))
+	c.Ctx.ResponseWriter.Write([]byte(res))
 }

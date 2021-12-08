@@ -1,16 +1,15 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.8
 
-# TODO: Parse ping output
-# TODO: Parse traceroute output
 # TODO: Insert hop zero (router source IP / client default gateway)
+# TODO: Parse traceroute output
 # TODO: Stylize web frontend
-# TODO: Publish to server (configure NGINX, create certificate, register DNS)
 
 import argparse
 import json
 import logging
 import os
 import queue
+import re
 import signal
 import sys
 import threading
@@ -90,61 +89,187 @@ def parse_args():
     return parser.parse_args()
 
 
-def analyze_path(mgmt_ip, src_ip, dst_ip, credentials, vendor):
+def parse_ping(vendor, model, data):
+    results = {
+        "sent": "N/A",
+        "received": "N/A",
+        "min": "N/A",
+        "avg": "N/A",
+        "max": "N/A",
+        "mdev": "N/A",
+    }
+    if vendor == "Palo Alto Networks":
+        rx = re.findall(r"(5)\spackets transmitted,\s(\d)\sreceived", data)
+        if rx:
+            results.update(
+                {
+                    "sent": int(rx[0][0]),
+                    "received": int(rx[0][1]),
+                }
+            )
+
+        rtt = re.findall(r"rtt.*?([.\d]+)/([.\d]+)/([.\d]+)/([.\d]+)", data)
+        if rtt:
+            results.update(
+                {
+                    "min": float(rtt[0][0]),
+                    "avg": float(rtt[0][1]),
+                    "max": float(rtt[0][2]),
+                    "mdev": float(rtt[0][3]),
+                }
+            )
+    elif vendor == "Cisco" and "Nexus" in model:
+        rx = re.findall(r"(5)\spackets transmitted,\s(\d)\spackets", data)
+        if rx:
+            results.update(
+                {
+                    "sent": int(rx[0][0]),
+                    "received": int(rx[0][1]),
+                }
+            )
+        rtt = re.findall(r"round-trip.*?([.\d]+)/([.\d]+)/([.\d]+)", data)
+        if rtt:
+
+            results.update(
+                {
+                    "min": float(rtt[0][0]),
+                    "avg": float(rtt[0][1]),
+                    "max": float(rtt[0][2]),
+                }
+            )
+    elif vendor == "Cisco":
+        rtt = re.findall(
+            r"Success.*?(\d{1,3})\spercent\s\((\d)/(\d).*?([.\d]+)/([.\d]+)/([.\d]+)",
+            data,
+        )
+        if rtt:
+            results.update(
+                {
+                    "sent": int(rtt[0][2]),
+                    "received": int(rtt[0][1]),
+                    "min": float(rtt[0][3]),
+                    "avg": float(rtt[0][4]),
+                    "max": float(rtt[0][5]),
+                }
+            )
+    else:
+        return None
+
+    return results
+
+
+def parse_traceroute(vendor, gw_name, gw_src, data):
+    results = ""
+    if vendor == "Palo Alto Networks":
+        results = re.sub(
+            r"(traceroute\sto.*)",
+            rf"\1\n 0  {gw_name.lower()}.wsgc.com ({gw_src})",
+            data,
+        )
+    elif vendor == "Cisco":
+        results = re.sub(
+            r"(\s{2}1\s\d{1,3}\..*msec)",
+            rf"  0 {gw_name.lower()}.wsgc.com ({gw_src})\n\1",
+            data,
+        )
+    else:
+        return None
+
+    return results
+
+
+def analyze_path(gw_name, mgmt_ip, gw_src, src, dst, device_user, device_pw, vendor, model):
     """Analyze the path between the source and destination"""
+
+    if vendor == "Cisco" and "Nexus" in model:
+        vendor == "Cisco Nexus"
 
     vendors = {
         "Cisco": {
             "ssh": {
                 "device_type": "cisco_ios",
                 "host": mgmt_ip,
-                "username": credentials["Cisco"]["username"],
-                "password": credentials["Cisco"]["password"],
+                "username": device_user,
+                "password": device_pw,
             },
-            "commands": [
-                f"ping {dst_ip} source {src_ip}",
-                f"traceroute {dst_ip} source {src_ip}",
-            ],
+            "expect_string": r"#",
+            "commands": {
+                "ping_src": f"ping {src} source {gw_src} timeout 1",
+                "ping_dst": f"ping {dst} source {gw_src} timeout 1",
+                "traceroute": f"traceroute {dst} source {gw_src} timeout 1 ttl 0 15",
+            },
+        },
+        "Cisco Nexus": {
+            "ssh": {
+                "device_type": "cisco_ios",
+                "host": mgmt_ip,
+                "username": device_user,
+                "password": device_pw,
+            },
+            "expect_string": r"#",
+            "commands": {
+                "ping_src": f"ping {src} source {gw_src} timeout 1",
+                "ping_dst": f"ping {dst} source {gw_src} timeout 1",
+                "traceroute": f"traceroute {dst} source {gw_src}",
+            },
         },
         "Palo Alto Networks": {
             "ssh": {
                 "device_type": "paloalto_panos",
                 "host": mgmt_ip,
-                "username": credentials["Palo Alto Networks"]["username"],
-                "password": credentials["Palo Alto Networks"]["password"],
+                "username": device_user,
+                "password": device_pw,
             },
-            "commands": [
-                f"ping count 4 source {src_ip} host {dst_ip}",
-                f"traceroute source {src_ip} host {dst_ip}",
-            ],
+            "expect_string": r">",
+            "commands": {
+                "ping_src": f"ping count 5 source {gw_src} host {src}",
+                "ping_dst": f"ping count 5 source {gw_src} host {dst}",
+                "traceroute": f"traceroute source {gw_src} host {dst}",
+            },
         },
     }
 
-    output = list()
+    # DEBUG: Changing to send_command breaks locally, but works from desktop
+    output = dict()
     with ConnectHandler(**vendors[vendor]["ssh"]) as net_connect:
-        for cmd in vendors[vendor]["commands"]:
-            output.append(
-                net_connect.send_command_timing(
-                    cmd,
-                    strip_prompt=True,
-                    strip_command=True,
-                    delay_factor=2,
-                )
+        for k, cmd in vendors[vendor]["commands"].items():
+            results = net_connect.send_command(
+                cmd,
+                strip_prompt=True,
+                strip_command=True,
+                # delay_factor=2,
+                expect_string=vendors[vendor]["expect_string"],
             )
+
+            if k.startswith("ping"):
+                ping_dst = src if k == "ping_src" else dst
+                results_parsed = {
+                    "gateway": gw_name,
+                    "source": gw_src,
+                    "destination": ping_dst,
+                }
+                results_parsed.update(parse_ping(vendor, model, results))
+                output[k] = results_parsed
+            else:
+                output[k] = parse_traceroute(vendor, gw_name, gw_src, results)
 
     return output
 
 
-def worker(nb, src, dst, credentials, direction):
-    device_attrs = get_active_gateway(nb, src)
-    logging.info(json.dumps(device_attrs, indent=2, sort_keys=True))
+def worker(nb, src, dst, device_user, device_pw, direction):
+    gw_attrs = get_active_gateway(nb, src)
+    logging.info(json.dumps(gw_attrs, indent=2, sort_keys=True))
 
     results = analyze_path(
-        device_attrs["mgmtIP"],
-        device_attrs["srcIP"],
+        gw_attrs["name"],
+        gw_attrs["mgmtIP"],
+        gw_attrs["srcIP"],
+        src,
         dst,
-        credentials,
-        device_attrs["vendor"],
+        device_user,
+        device_pw,
+        gw_attrs["vendor"],
+        gw_attrs["model"],
     )
 
     results_queue.put({direction: results})
@@ -171,7 +296,7 @@ def main():
     nb = NetBrain(
         env["netbrain_url"],
         env["netbrain_user"],
-        env["netbrain_password"],
+        env["netbrain_pw"],
         env["tenant_name"],
         env["domain_name"],
     )
@@ -187,7 +312,8 @@ def main():
     for src, dst in [(args.source, args.destination), (args.destination, args.source)]:
         direction = "forward" if src == args.source else "reverse"
         t = threading.Thread(
-            target=worker, args=(nb, src, dst, env["credentials"], direction)
+            target=worker,
+            args=(nb, src, dst, env["device_user"], env["device_pw"], direction),
         )
         worker_threads.append(t)
         t.start()
@@ -197,11 +323,11 @@ def main():
 
     results_queue.join()
 
-    print("\n".join(results["forward"]))
-    print("\n".join(results["reverse"]))
-
     t1_stop = time.time()
-    print(f"\n Took {t1_stop-t1_start :.3f} seconds to complete")
+    results.update(
+        {"exec_time": f"Took {t1_stop-t1_start :.3f} seconds to complete"})
+
+    print(json.dumps(results))
 
 
 if __name__ == "__main__":

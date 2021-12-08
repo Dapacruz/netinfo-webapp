@@ -1,0 +1,92 @@
+#loading-message img {
+	display: block;
+	margin: 15px;
+	height: 25px;
+	width: 400px;
+}
+#loading-message {
+	display: none;
+	position: fixed;
+	z-index: 1;
+	padding-top: 100px;
+	left: 0;
+	width: 100%;
+	height: 100%;
+}
+#scanport {
+	text-align: center;
+	background-color: rgba(245, 244, 244, 0.952);
+	width: 99.8%;
+}
+
+.openPort {
+	color: rgb(2, 199, 2);
+	font-weight: bold;
+}
+.closePort {
+	color: red;
+	font-weight: bold;
+}
+
+/* Style the search field */
+input[type=text] {
+	padding: 10px;
+	margin: 3px;
+	font-size: 17px;
+	font-weight: bold;
+	border: 2px solid #333333;
+	width: 10.35cm;
+	background: #f1f1f1;
+}
+
+/* Style the submit button */
+.button {
+	position: relative;
+	padding: 10px;
+	margin: 3px;
+	font-size: 17px;
+	font-weight: bold;
+	border: 2px solid #333333;
+	width: 10.35cm;
+	color: rgb(255, 255, 255);
+	cursor: pointer;
+	background: #0b7dda;
+}
+
+.button:hover {
+	background: #3d3d3d;
+}
+
+.button:active {
+	background: #0583cc;
+}
+
+.button__text {
+	font: bold 20px 'Quicksand', san-serif;
+	color: #ffffff;
+	transition: all 0.2s;
+}
+.button--loading::after {
+	content: "";
+	position: absolute;
+	width: 16px;
+	height: 16px;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	margin: auto;
+	border: 4px solid transparent;
+	border-top-color: #ffffff;
+	border-radius: 50%;
+	animation: button-loading-spinner 1s ease infinite;
+}
+@keyframes button-loading-spinner {
+	from {
+		transform: rotate(0turn);
+	}
+
+	to {
+		transform: rotate(1turn);
+	}
+}
