@@ -1,112 +1,167 @@
-$('#analyze_path').click(() => {
-    analyze_path();
+let analyze_path_btn = document.querySelector('#analyze_path');
+document.querySelectorAll('.ui-input').forEach((e) => {
+    e.addEventListener('keyup', function (event) {
+        if (event.keyCode == 13) {
+            event.preventDefault();
+            analyze_path_btn.click();
+        }
+    });
 });
 
-$('#source, #destination').on('keyup', function (event) {
-	if (event.keyCode == 13) {
-		event.preventDefault();
-		$('#analyze_path').click();
-	}
-});
-
-var table;
-var tableInitialized = false;
-
+let table;
+let tableInitialized = false;
 if (!tableInitialized) {
     tableInitialized = true;
     table = $('#netinfo').DataTable({
         columns: [
+            { data: 'Gateway' },
             { data: 'Source' },
             { data: 'Destination' },
-            { data: 'Protocol' },
             { data: 'Latency' },
+            { data: 'Protocol' },
             { data: 'Type' },
             { data: 'Status' },
         ],
 
         paging: false,
-        createdRow: (row, data, dataIndex, cells) => {
-            if (data['Status'] == `open`) {
-                $(cells[4]).addClass('openPort');
-            } else {
-                $(cells[4]).addClass('closePort');
-            }
-        }
+        // createdRow: (row, data, dataIndex, cells) => {
+        //     if (data['Status'] == `open`) {
+        //         $(cells[4]).addClass('openPort');
+        //     } else {
+        //         $(cells[4]).addClass('closePort');
+        //     }
+        // }
     });
 }
 
-function analyze_path() {
-    $('#errors').html('');
-    $('#results').html('&nbsp;');
-    source = $('#source').val();
-    destination = $('#destination').val();
+analyze_path_btn.addEventListener('click', analyze_path);
+
+function sleep(s) {
+    return new Promise(resolve => setTimeout(resolve, s * 1000));
+}
+
+async function analyze_path() {
+    const button = document.querySelector('.button');
+    const errors = document.querySelector('#errors');
+    const results = document.querySelector('#results');
+    const source = document.querySelector('#source').value;
+    const destination = document.querySelector('#destination').value;
+
+    table.clear();
+    table.draw();
+
+    errors.style.fontFamily = '"Roboto Mono", monospace';
+    errors.innerHTML = '&nbsp;';
+
+    results.style.fontFamily = '"Roboto Mono", monospace';
+    results.innerHTML = '&nbsp;';
 
     if (!source || !destination) {
-		console.log('You cannot leave the source or destination empty.');
-		window.alert('You cannot leave the source or destination empty.');
-		return;
+        console.log('You cannot leave the source or destination empty.');
+        window.alert('You cannot leave the source or destination empty.');
+        return;
     }
 
-    $('.button').addClass('button--loading').prop("disabled",true);
-   // $('#loading-progressbar').attr('style', 'display: block;');
+    // Change button color to indicate that the analysis is running
+    button.classList.add('button--loading');
+    button.setAttribute("disabled", true);
+    button.innerHTML = 'Analyzing Path ...';
+    button.style.backgroundColor = '#3d3d3d';
+    button.style.cursor = 'not-allowed';
 
-    $.ajax({
-        url: '/analyze/path',
-        type: 'POST',
-        timeout: 3*60*1000,
-        data: `source=${source}&destination=${destination}`,
-        dataType: 'json',
-        success: function(response) {
+    let response = await fetch(`/analyze/path?source=${source}&destination=${destination}`);
 
-            // Wrap all lines and replace empty lines with a <br>
-            // var modifiedResponse = [];
-            // response.split(/\r?\n/).forEach(function(val) {
-            //     if (!val) {
-            //         modifiedResponse.push(`<br>`);
-            //     } else {
-            //         modifiedResponse.push(`<div>${val}</div>`);
-            //     }
-            // });
+    if (response.ok) {
+        let data = await response.json();
+        const job_id = data.jobid;
+        console.log(`Job ID: ${job_id}`);
 
-            // Wrap headeriv id="results-body">${modifiedResponse[2]}`;
-            // modifiedResponse[-1] = `${modifiedResponse[-1]}</div>`;
-
-            // $('#results').html(response.reverse.ping_src);
-            // netinfo.clear();
-            // netinfo.rows.add(response.stdout.forward.ping_src).draw();
-            // netinfo.rows.add(response.stdout.forward.ping_dst).draw();
-            // netinfo.rows.add(response.stdout.reverse.ping_src).draw();
-            // netinfo.rows.add(response.stdout.reverse.ping_dst).draw();
-            if (response.stderr) {
-                $('#errors').html(response.stderr);
-            } else {
-                html = `
-                    <div>${JSON.stringify(response.stdout.forward.ping_src, null, 2)}</div>
-                    <div>${JSON.stringify(response.stdout.forward.ping_dst, null, 2)}</div>
-                    <div>${response.stdout.forward.traceroute.replace(/traceroute\s\n/, '')}</div>
-                    <div>${JSON.stringify(response.stdout.reverse.ping_src, null, 2)}</div>
-                    <div>${JSON.stringify(response.stdout.reverse.ping_dst, null, 2)}</div>
-                    <div>${response.stdout.reverse.traceroute.replace(/traceroute\s\n/, '')}</div>
-                    <div>${response.stdout.exec_time}</div>
-                `
-                $('#results').html(html);
+        do {
+            await sleep(10);
+            response = await fetch(`/get/results?job_id=${job_id}`);
+            // console.log(response.status)
+            if (response.status === 200) {
+                data = await response.json();
+                console.log(data);
             }
-
-            // $('#results').html(JSON.stringify(response, null, 2));
-            // $('#results').html(modifiedResponse.join(''));
-
-            $('#results div').attr('style', 'font-family: "Roboto Mono", monospace;');
-            $('.button').removeClass('button--loading').prop("disabled",false);
-            //$('#loading-progressbar').attr('style', 'display: none;');
-        },
-        error: function(xhr, status, error) {
-            console.log(xhr)
-            console.log(status)
-            console.log(error)
-            $('.button').prop("disabled", false).removeClass('button--loading');
-            //$('#loading-progressbar').attr('style', 'display: none;');
-            window.alert('Something went seriously wrong');
         }
-    });
-}
+        while (response.status === 204);
 
+        if (data.stderr) {
+            errors.innerHTML = data.stderr;
+        } else {
+            // html = `
+            //     <div>${JSON.stringify(data.stdout.forward.ping_src, null, 2)}</div>
+            //     <div>${JSON.stringify(data.stdout.forward.ping_dst, null, 2)}</div>
+            //     <div>${data.stdout.forward.traceroute.replace(/traceroute\s\n/, '')}</div>
+            //     <div>${JSON.stringify(data.stdout.reverse.ping_src, null, 2)}</div>
+            //     <div>${JSON.stringify(data.stdout.reverse.ping_dst, null, 2)}</div>
+            //     <div>${data.stdout.reverse.traceroute.replace(/traceroute\s\n/, '')}</div>
+            //     <div>${data.stdout.exec_time}</div>
+            // `
+            // html = `
+            // <div>${data.stdout.forward.traceroute.replace(/traceroute\s\n/, '')}</div>
+            // <div>${data.stdout.reverse.traceroute.replace(/traceroute\s\n/, '')}</div>
+            // <div>${data.stdout.exec_time}</div>
+            // `
+            html = `
+                <div>${data.stdout.forward.traceroute}</div>
+                <div>${data.stdout.reverse.traceroute}</div>
+                <div>${data.stdout.exec_time}</div>
+            `;
+            results.innerHTML = html;
+
+            // Add string good/bad to table status
+            table.row.add({
+                Gateway: data.stdout.reverse.ping_src.gateway,
+                Source: data.stdout.reverse.ping_src.source,
+                Destination: data.stdout.reverse.ping_src.destination,
+                Latency: data.stdout.reverse.ping_src.avg+' ms',
+                Protocol: '',
+                Type: 'Ping',
+                Status: ''
+            });
+            table.row.add({
+                Gateway: data.stdout.reverse.ping_dst.gateway,
+                Source: data.stdout.reverse.ping_dst.source,
+                Destination: data.stdout.reverse.ping_dst.destination,
+                Latency: data.stdout.reverse.ping_dst.avg+' ms',
+                Protocol: '',
+                Type: 'Ping',
+                Status: ''
+            });
+            table.row.add({
+                Gateway: data.stdout.forward.ping_src.gateway,
+                Source: data.stdout.forward.ping_src.source,
+                Destination: data.stdout.forward.ping_src.destination,
+                Latency: data.stdout.forward.ping_src.avg+' ms',
+                Protocol: '',
+                Type: 'Ping',
+                Status: ''
+            });
+            table.row.add({
+                Gateway: data.stdout.forward.ping_dst.gateway,
+                Source: data.stdout.forward.ping_dst.source,
+                Destination: data.stdout.forward.ping_dst.destination,
+                Latency: data.stdout.forward.ping_dst.avg+' ms',
+                Protocol: '',
+                Type: 'Ping',
+                Status: ''
+            });
+            table.draw();
+        }
+
+        button.classList.remove('button--loading');
+        button.removeAttribute("disabled");
+        button.innerHTML = 'Analyze Path';
+        button.style.backgroundColor = '#0b7dda';
+        button.style.cursor = 'pointer';
+    } else {
+        button.classList.remove('button--loading');
+        button.removeAttribute("disabled");
+        button.innerHTML = 'Analyze Path';
+        button.style.backgroundColor = '#0b7dda';
+        button.style.cursor = 'pointer';
+        window.alert('Something went seriously wrong');
+    }
+}

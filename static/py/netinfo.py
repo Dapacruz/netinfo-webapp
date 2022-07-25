@@ -15,9 +15,8 @@ import sys
 import threading
 import time
 
-from netmiko import ConnectHandler
-
 from netbrain import NetBrain
+from netmiko import ConnectHandler
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -41,6 +40,8 @@ def import_env(path):
 
 def get_active_gateway(nb, src_ip):
     """Get the active gateway for the source subnet"""
+    device_attrs = {}
+
     for gw in nb.get_gateway_list(src_ip):
         gw = json.loads(gw["payload"])
 
@@ -57,17 +58,20 @@ def get_active_gateway(nb, src_ip):
 
         # Skip unknown routing devices
         if device_attrs["vendor"] not in router_types:
-            device_attrs = ""
+            device_attrs = {}
             continue
 
         # Skip PAN HA passive member
         if device_attrs["vendor"] == "Palo Alto Networks" and device_attrs["isHA"]:
             if nb.get_pan_ha_state(device_attrs["name"]) == "passive":
+                device_attrs = {}
                 continue
 
         device_attrs.update({"srcIP": gw["ip"]})
 
         return device_attrs
+
+    return device_attrs
 
 
 def parse_args():
@@ -89,7 +93,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def parse_ping(vendor, model, data):
+def parse_ping(vendor, data):
     results = {
         "sent": "N/A",
         "received": "N/A",
@@ -99,7 +103,7 @@ def parse_ping(vendor, model, data):
         "mdev": "N/A",
     }
     if vendor == "Palo Alto Networks":
-        rx = re.findall(r"(5)\spackets transmitted,\s(\d)\sreceived", data)
+        rx = re.findall(r"(\d)\spackets transmitted,\s(\d)\sreceived", data)
         if rx:
             results.update(
                 {
@@ -118,8 +122,8 @@ def parse_ping(vendor, model, data):
                     "mdev": float(rtt[0][3]),
                 }
             )
-    elif vendor == "Cisco" and "Nexus" in model:
-        rx = re.findall(r"(5)\spackets transmitted,\s(\d)\spackets", data)
+    elif vendor == "Cisco Nexus":
+        rx = re.findall(r"(\d)\spackets transmitted,\s(\d)\spackets", data)
         if rx:
             results.update(
                 {
@@ -166,6 +170,19 @@ def parse_traceroute(vendor, gw_name, gw_src, data):
             rf"\1\n 0  {gw_name.lower()}.wsgc.com ({gw_src})",
             data,
         )
+        # Remove empty first line
+        results = "\n".join(results.split("\n")[1:])
+    elif vendor == "Cisco Nexus":
+        results = re.sub(
+            r"(traceroute.*)",
+            rf"\n\1",
+            data,
+        )
+        results = re.sub(
+            r"(\s1\s{2}\d{1,3}\..*ms)",
+            rf" 0  {gw_name.lower()}.wsgc.com ({gw_src})\n\1",
+            results,
+        )
     elif vendor == "Cisco":
         results = re.sub(
             r"(\s{2}1\s\d{1,3}\..*msec)",
@@ -178,58 +195,62 @@ def parse_traceroute(vendor, gw_name, gw_src, data):
     return results
 
 
-def analyze_path(gw_name, mgmt_ip, gw_src, src, dst, device_user, device_pw, vendor, model):
+def analyze_path(
+    gw_name, mgmt_ip, gw_src, src, dst, device_user, device_pw, vendor, model
+):
     """Analyze the path between the source and destination"""
 
     if vendor == "Cisco" and "Nexus" in model:
-        vendor == "Cisco Nexus"
+        vendor = "Cisco Nexus"
 
     vendors = {
-        "Cisco": {
-            "ssh": {
-                "device_type": "cisco_ios",
-                "host": mgmt_ip,
-                "username": device_user,
-                "password": device_pw,
-            },
-            "expect_string": r"#",
-            "commands": {
-                "ping_src": f"ping {src} source {gw_src} timeout 1",
-                "ping_dst": f"ping {dst} source {gw_src} timeout 1",
-                "traceroute": f"traceroute {dst} source {gw_src} timeout 1 ttl 0 15",
-            },
-        },
-        "Cisco Nexus": {
-            "ssh": {
-                "device_type": "cisco_ios",
-                "host": mgmt_ip,
-                "username": device_user,
-                "password": device_pw,
-            },
-            "expect_string": r"#",
-            "commands": {
-                "ping_src": f"ping {src} source {gw_src} timeout 1",
-                "ping_dst": f"ping {dst} source {gw_src} timeout 1",
-                "traceroute": f"traceroute {dst} source {gw_src}",
-            },
-        },
         "Palo Alto Networks": {
             "ssh": {
                 "device_type": "paloalto_panos",
                 "host": mgmt_ip,
                 "username": device_user,
                 "password": device_pw,
+                "conn_timeout": 60,
             },
             "expect_string": r">",
             "commands": {
-                "ping_src": f"ping count 5 source {gw_src} host {src}",
-                "ping_dst": f"ping count 5 source {gw_src} host {dst}",
-                "traceroute": f"traceroute source {gw_src} host {dst}",
+                "ping_src": f"ping count 3 source {gw_src} host {src}",
+                "ping_dst": f"ping count 3 source {gw_src} host {dst}",
+                "traceroute": f"traceroute wait 1 max-ttl 15 source {gw_src} host {dst}",
+            },
+        },
+        "Cisco Nexus": {
+            "ssh": {
+                "device_type": "cisco_nxos",
+                "host": mgmt_ip,
+                "username": device_user,
+                "password": device_pw,
+                "conn_timeout": 60,
+            },
+            "expect_string": r"#|(\s\d{1,2}\s{2}\*\s\*\s\*\s*){5}",
+            "commands": {
+                "ping_src": f"ping {src} source {gw_src} timeout 1 count 3",
+                "ping_dst": f"ping {dst} source {gw_src} timeout 1 count 3",
+                "traceroute": f"traceroute {dst} source {gw_src}",
+            },
+        },
+        "Cisco": {
+            "ssh": {
+                "device_type": "cisco_ios",
+                "host": mgmt_ip,
+                "username": device_user,
+                "password": device_pw,
+                "conn_timeout": 60,
+            },
+            "expect_string": r"#",
+            "commands": {
+                "ping_src": f"ping {src} source {gw_src} timeout 1 repeat 3",
+                "ping_dst": f"ping {dst} source {gw_src} timeout 1 repeat 3",
+                "traceroute": f"traceroute {dst} source {gw_src} timeout 1 ttl 0 15",
             },
         },
     }
 
-    # DEBUG: Changing to send_command breaks locally, but works from desktop
     output = dict()
     with ConnectHandler(**vendors[vendor]["ssh"]) as net_connect:
         for k, cmd in vendors[vendor]["commands"].items():
@@ -237,7 +258,7 @@ def analyze_path(gw_name, mgmt_ip, gw_src, src, dst, device_user, device_pw, ven
                 cmd,
                 strip_prompt=True,
                 strip_command=True,
-                # delay_factor=2,
+                max_loops=50000,
                 expect_string=vendors[vendor]["expect_string"],
             )
 
@@ -248,11 +269,10 @@ def analyze_path(gw_name, mgmt_ip, gw_src, src, dst, device_user, device_pw, ven
                     "source": gw_src,
                     "destination": ping_dst,
                 }
-                results_parsed.update(parse_ping(vendor, model, results))
+                results_parsed.update(parse_ping(vendor, results))
                 output[k] = results_parsed
             else:
                 output[k] = parse_traceroute(vendor, gw_name, gw_src, results)
-
     return output
 
 
@@ -260,19 +280,50 @@ def worker(nb, src, dst, device_user, device_pw, direction):
     gw_attrs = get_active_gateway(nb, src)
     logging.info(json.dumps(gw_attrs, indent=2, sort_keys=True))
 
-    results = analyze_path(
-        gw_attrs["name"],
-        gw_attrs["mgmtIP"],
-        gw_attrs["srcIP"],
-        src,
-        dst,
-        device_user,
-        device_pw,
-        gw_attrs["vendor"],
-        gw_attrs["model"],
-    )
+    if gw_attrs:
+        results = analyze_path(
+            gw_attrs.get("name"),
+            gw_attrs.get("mgmtIP"),
+            gw_attrs.get("srcIP"),
+            src,
+            dst,
+            device_user,
+            device_pw,
+            gw_attrs.get("vendor"),
+            gw_attrs.get("model"),
+        )
 
-    results_queue.put({direction: results})
+        results_queue.put({direction: results})
+    else:
+        results_queue.put(
+            {
+                direction: {
+                    "ping_src": {
+                        "gateway": "Gateway not implemented",
+                        "source": "",
+                        "destination": "",
+                        "sent": "",
+                        "received": "",
+                        "min": "",
+                        "avg": "",
+                        "max": "",
+                        "mdev": "",
+                    },
+                    "ping_dst": {
+                        "gateway": "Gateway not implemented",
+                        "source": "",
+                        "destination": "",
+                        "sent": "",
+                        "received": "",
+                        "min": "",
+                        "avg": "",
+                        "max": "",
+                        "mdev": "",
+                    },
+                    "traceroute": "Gateway not implemented",
+                }
+            }
+        )
 
 
 def results_manager():
@@ -324,8 +375,7 @@ def main():
     results_queue.join()
 
     t1_stop = time.time()
-    results.update(
-        {"exec_time": f"Took {t1_stop-t1_start :.3f} seconds to complete"})
+    results.update({"exec_time": f"Took {t1_stop-t1_start :.3f} seconds to complete"})
 
     print(json.dumps(results))
 
